@@ -1,0 +1,7 @@
+<launch>
+
+  <rosparam file="$(find yolo_pointcloud_detect)/cfg/params.yaml" command="load" />
+  <node pkg="yolo_pointcloud_detect" type="yolo_pointcloud_detect_node" name="detect3d" output="screen">
+  </node>
+
+</launch>
