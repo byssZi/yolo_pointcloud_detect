@@ -424,8 +424,6 @@ void YoloDetector::draw_image(cv::Mat& img, std::vector<Detection>& inferResult,
             cv::rectangle(img, topLeft, bottomRight, bboxColor, -1);
             cv::putText(img, labelStr, cv::Point(r.x, r.y - 2), cv::FONT_HERSHEY_PLAIN, 1.2, cv::Scalar(255, 255, 255), 2, cv::LINE_AA);
         }
-        std::cout<<"maskMatrix.size() = "<< inferResult[i].maskMatrix.size() <<std::endl;
-
         draw_mask(img, inferResult[i].maskMatrix.data());
     }
 }

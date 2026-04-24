@@ -51,12 +51,29 @@ public:
         // params
         pkg_loc_ = ros::package::getPath("yolo_pointcloud_detect");
         nh.param<std::string>("trt_file", trtFile_, pkg_loc_ + std::string("/model/yolo11.plan"));
+        nh.param<float>("roi_x_max", roi_x_max_, 100);
+        nh.param<float>("roi_x_min", roi_x_min_, 0);
+        nh.param<float>("roi_y_max", roi_y_max_, 40);
+        nh.param<float>("roi_y_min", roi_y_min_, -40);
+        nh.param<float>("roi_z_max", roi_z_max_, 3);
+        nh.param<float>("roi_z_min", roi_z_min_, -3);
+        ROI_MAX_POINT_ = Eigen::Vector4f(roi_x_max_, roi_y_max_, roi_z_max_, 1);
+        ROI_MIN_POINT_ = Eigen::Vector4f(roi_x_min_, roi_y_min_, roi_z_min_, 1);
+        nh.param<float>("voxel_grid_size", voxel_size_, 0.2);
+        nh.param<float>("clustering/cluster_tolerance", cluster_tolerance_, 0.5);
+        nh.param<int>("clustering/min_cluster_size", min_cluster_size_, 10);
+        nh.param<int>("clustering/max_cluster_size", max_cluster_size_, 10000);
+        nh.param<bool>("clustering/use_pca_box", use_pca_box_, true);
+        nh.param<bool>("clustering/use_tracking", use_tracking_, true);
+        nh.param<float>("clustering/displacement_thresh", displacement_thresh_, 1.0);
+        nh.param<float>("clustering/iou_thresh", iou_thresh_, 1.0);
+
         // create detector (uses defaults for other constructor args)
         detector_ = std::make_unique<YoloDetector>(trtFile_);
         // Create point processor
         obstacle_detector_ = std::make_shared<lidar_obstacle_detector::ObstacleDetector<pcl::PointXYZ>>();
         obstacle_id_ = 0;
-        PatchworkppGroundSeg_.reset(new PatchWorkpp<pcl::PointXYZI>(&nh));
+        PatchworkppGroundSeg_.reset(new PatchWorkpp<pcl::PointXYZ>(&nh));
 
         ROS_INFO("DetectorNode started. Engine: %s", trtFile_.c_str());
 
@@ -146,13 +163,15 @@ private:
         }
 
         // 点云下采样
-        pcl::PointCloud<pcl::PointXYZI>::Ptr current_pc_ptr(new pcl::PointCloud<pcl::PointXYZI>);
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr current_pc_ptr(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::fromROSMsg(*cloud_msg, *current_pc_ptr);
-        auto segmented_clouds = PatchworkppGroundSeg_->estimate_ground(*current_pc_ptr);
+        auto filtered_cloud = obstacle_detector_->filterCloud(current_pc_ptr, voxel_size_, ROI_MIN_POINT_, ROI_MAX_POINT_);
+        auto segmented_clouds = PatchworkppGroundSeg_->estimate_ground(*filtered_cloud);
 
         projector_.loadPointCloud(segmented_clouds.first); // 加载点云
         projector_.setPointSize(3); // 设置点大小
-        projector_.setDisplayMode(false); // 使用距离作为颜色
+        //projector_.setDisplayMode(false); // 使用距离作为颜色
         projector_.setFilterMode(true); // 启用重叠点过滤
 
         // 投影点云到图像
@@ -168,10 +187,15 @@ private:
 
         // 3. 【关键】创建一个临时的 PointXYZ 点云，把你的自定义点拷贝进去
         pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        if (projected_result.first->empty()) {
+            ROS_WARN("Projected point cloud is empty!");
+            image_msg_ = cv_bridge::CvImage(img_msg->header, "bgr8", projected_result.second).toImageMsg();
+            cam_pub_.publish(image_msg_);
+            return;
+        }
         temp_cloud->reserve(projected_result.first->size());  // 预分配，加速
 
         for (const auto& pt : *projected_result.first) {
-            if(pt.z <= -LIDAR_HEIGHT_THRESH) continue; // 过滤掉高度过高的点
             pcl::PointXYZ p;
             p.x = pt.x;
             p.y = pt.y;
@@ -179,7 +203,7 @@ private:
             temp_cloud->push_back(p);
         }
         // Cluster objects
-        auto cloud_clusters = obstacle_detector_->clustering(temp_cloud, CLUSTER_THRESH, CLUSTER_MIN_SIZE, CLUSTER_MAX_SIZE);
+        auto cloud_clusters = obstacle_detector_->clustering(temp_cloud, cluster_tolerance_, min_cluster_size_, max_cluster_size_);
         publishDetectedObjects(std::move(cloud_clusters), cloud_msg->header, projected_result.second, projected_result.first);
         // 发布融合后的图像
         image_msg_ = cv_bridge::CvImage(img_msg->header, "bgr8", projected_result.second).toImageMsg();
@@ -195,9 +219,9 @@ private:
  
             // 获得label
             int label = getClusterMainLabel(cluster, projected_result);
-            if(label >= 3) continue; // 如果没有有效的label，跳过这个cluster
+            if(label >= 8) continue; // 如果没有有效的label，跳过这个cluster
             // Create Bounding Box
-            Box box = USE_PCA_BOX ? 
+            Box box = use_pca_box_ ? 
                 obstacle_detector_->pcaBoundingBox(cluster, obstacle_id_) : 
                 obstacle_detector_->axisAlignedBoundingBox(cluster, obstacle_id_);
             
@@ -217,8 +241,8 @@ private:
             curr_boxes_.emplace_back(box);
         }
         // Re-assign Box ids based on tracking result
-        if (USE_TRACKING)
-            obstacle_detector_->obstacleTracking(prev_boxes_, curr_boxes_, DISPLACEMENT_THRESH, IOU_THRESH);
+        if (use_tracking_)
+            obstacle_detector_->obstacleTracking(prev_boxes_, curr_boxes_, displacement_thresh_, iou_thresh_);
         
         // Lookup for frame transform between the lidar frame and the target frame
         auto bbox_header = header;
@@ -355,7 +379,7 @@ private:
         marker_bbox.color.b = 0.0;
         marker_bbox.scale.x = 0.1;
         marker_bbox.color.a = 1.0;
-        marker_bbox.lifetime.fromSec(0.1);
+        marker_bbox.lifetime.fromSec(0.2);
         return std::move(marker_bbox);
     };
 
@@ -578,18 +602,20 @@ private:
     sensor_msgs::PointCloud2 fusion_msg_;  //等待发送的点云消息
 
     std::shared_ptr<lidar_obstacle_detector::ObstacleDetector<pcl::PointXYZ>> obstacle_detector_;
-    boost::shared_ptr<PatchWorkpp<pcl::PointXYZI>> PatchworkppGroundSeg_;
+    boost::shared_ptr<PatchWorkpp<pcl::PointXYZ>> PatchworkppGroundSeg_;
     size_t obstacle_id_;
     std::vector<Box> prev_boxes_, curr_boxes_;
-
-    const float CLUSTER_THRESH = 0.6f;
-    const int CLUSTER_MIN_SIZE = 10;
-    const int CLUSTER_MAX_SIZE = 5000;
-    const bool USE_PCA_BOX = true;
-    const bool USE_TRACKING = true;
-    const float DISPLACEMENT_THRESH = 1.0;
-    const float IOU_THRESH = 1.0;
-    const float LIDAR_HEIGHT_THRESH = 2.0; // 过滤掉高度过低的点
+    float roi_x_min_, roi_x_max_, roi_y_min_, roi_y_max_, roi_z_min_, roi_z_max_;
+    Eigen::Vector4f ROI_MAX_POINT_;
+    Eigen::Vector4f ROI_MIN_POINT_;
+    float voxel_size_;
+    float cluster_tolerance_;
+    int min_cluster_size_;
+    int max_cluster_size_;
+    bool use_pca_box_;
+    bool use_tracking_;
+    float displacement_thresh_;
+    float iou_thresh_;
 };
 
 int main(int argc, char** argv)

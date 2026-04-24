@@ -20,16 +20,16 @@ struct Pt {
   cv::Point point;
   float dist;
   float z;
-  float intensity;
+  //float intensity;
 };
 
 class Projector {
 public:
   cv::Mat oriCloud;
-  std::vector<float> intensitys;
+  //std::vector<float> intensitys;
   const float ROI[6] = {-4, 3.5, 5.0, 10.0, -2.1, 3.0};
   int point_size_ = 3;
-  bool intensity_color_ = false;
+  //bool intensity_color_ = false;
   bool overlap_filter_ = false;
 
   void ROIFilter() {
@@ -51,18 +51,18 @@ public:
   }
 
   void setPointSize(int size) { point_size_ = size; }
-  void setDisplayMode(bool intensity_show) {
-    intensity_color_ = intensity_show;
-  }
+  // void setDisplayMode(bool intensity_show) {
+  //   intensity_color_ = intensity_show;
+  // }
   void setFilterMode(bool filter_mode) { overlap_filter_ = filter_mode; }
 
-  bool loadPointCloud(pcl::PointCloud<pcl::PointXYZI> pcl) {
+  bool loadPointCloud(pcl::PointCloud<pcl::PointXYZ> pcl) {
     oriCloud = cv::Mat(cv::Size(pcl.points.size(), 3), CV_32FC1);
     for (size_t i = 0; i < pcl.points.size(); ++i) {
       oriCloud.at<float>(0, i) = pcl.points[i].x;
       oriCloud.at<float>(1, i) = pcl.points[i].y;
       oriCloud.at<float>(2, i) = pcl.points[i].z;
-      intensitys.push_back(pcl.points[i].intensity);
+      //intensitys.push_back(pcl.points[i].intensity);
     }
     // ROIFilter();
     return true;
@@ -121,7 +121,7 @@ public:
     }
     cv::Mat projCloud2d = K * (R_ * oriCloud + repeat(T_, 1, oriCloud.cols));
     float maxDist = 0;
-    float maxIntensity = 0;
+    //float maxIntensity = 0;
     std::vector<Pt> points;
     std::vector<std::vector<int>> filter_pts(outImg.rows,
                                              std::vector<int>(outImg.cols, -1));
@@ -133,7 +133,7 @@ public:
       int x2d = cvRound(x / z);
       int y2d = cvRound(y / z);
       float d = sqrt(dist.at<float>(0, i));
-      float intensity = intensitys[i];
+      //float intensity = intensitys[i];
 
       if (x2d >= 0 && y2d >= 0 && x2d < outImg.cols && y2d < outImg.rows && z > 0) {
 
@@ -160,13 +160,14 @@ public:
         p.b = color[0];
         p.g = color[1];
         p.r = color[2];
-        p.intensity = intensity;
+        //p.intensity = intensity;
         p.label = label;
         fusion_pcl_ptr->points.push_back(p);
 
         maxDist = std::max(maxDist, d);
-        maxIntensity = std::max(maxIntensity, intensity);
-        points.push_back(Pt{cv::Point(x2d, y2d), d, z, intensity});
+        //maxIntensity = std::max(maxIntensity, intensity);
+        //points.push_back(Pt{cv::Point(x2d, y2d), d, z, intensity});
+        points.push_back(Pt{cv::Point(x2d, y2d), d, z});
         // add size
         if (filter_pts[y2d][x2d] != -1) {
           int32_t p_idx = filter_pts[y2d][x2d];
@@ -205,15 +206,17 @@ public:
       for (size_t i = 0; i < filtered_idxes.size(); ++i) {
         int pt_idx = filtered_idxes[i];
         cv::Scalar color;
-        if (intensity_color_) {
-          // intensity
-          float intensity = points[pt_idx].intensity;
-          color = fakeColor(intensity / maxIntensity);
-        } else {
-          // distance
-          float d = points[pt_idx].dist;
-          color = fakeColor(d / maxDist);
-        }
+        // if (intensity_color_) {
+        //   // intensity
+        //   float intensity = points[pt_idx].intensity;
+        //   color = fakeColor(intensity / maxIntensity);
+        // } else {
+        //   // distance
+        //   float d = points[pt_idx].dist;
+        //   color = fakeColor(d / maxDist);
+        // }
+        float d = points[pt_idx].dist;
+        color = fakeColor(d / maxDist);
         circle(outImg, points[pt_idx].point, point_size_, color, -1);
       }
     } else {
@@ -221,15 +224,17 @@ public:
            [](const Pt &a, const Pt &b) { return a.dist > b.dist; });
       for (size_t i = 0; i < points.size(); ++i) {
         cv::Scalar color;
-        if (intensity_color_) {
-          // intensity
-          float intensity = points[i].intensity;
-          color = fakeColor(intensity / maxIntensity);
-        } else {
-          // distance
-          float d = points[i].dist;
-          color = fakeColor(d / maxDist);
-        }
+        // if (intensity_color_) {
+        //   // intensity
+        //   float intensity = points[i].intensity;
+        //   color = fakeColor(intensity / maxIntensity);
+        // } else {
+        //   // distance
+        //   float d = points[i].dist;
+        //   color = fakeColor(d / maxDist);
+        // }
+        float d = points[i].dist;
+        color = fakeColor(d / maxDist);
         circle(outImg, points[i].point, point_size_, color, -1);
       }
     }
